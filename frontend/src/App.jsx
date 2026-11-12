@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Moon, Pause, Play, RotateCcw, Sun, Volume2, VolumeX } from 'lucide-react'
 
 const W = 10, H = 20
 const SHAPES = [
@@ -26,12 +26,17 @@ function App() {
   const [paused, setPaused] = useState(false)
   const [over, setOver] = useState(false)
   const [muted, setMuted] = useState(false)
+  const [theme, setTheme] = useState(() => localStorage.getItem('tetris-theme') || 'dark')
   const [best, setBest] = useState(() => Number(localStorage.getItem('tetris-best') || 0))
   const [scores, setScores] = useState([])
   const [player, setPlayer] = useState('')
   const [saved, setSaved] = useState(false)
+  const [backendUrl, setBackendUrl] = useState(() => localStorage.getItem('tetris-backend-url') || 'http://localhost:8080')
+  const [connection, setConnection] = useState('offline')
+  const [apiMessage, setApiMessage] = useState('')
   const boardRef = useRef(board), pieceRef = useRef(piece), nextRef = useRef(next), pausedRef = useRef(paused), overRef = useRef(over), scoreRef = useRef(score), linesRef = useRef(lines), mutedRef = useRef(muted)
   useEffect(() => { boardRef.current = board }, [board]); useEffect(() => { pieceRef.current = piece }, [piece]); useEffect(() => { nextRef.current = next }, [next]); useEffect(() => { pausedRef.current = paused }, [paused]); useEffect(() => { overRef.current = over }, [over]); useEffect(() => { scoreRef.current = score }, [score]); useEffect(() => { linesRef.current = lines }, [lines]); useEffect(() => { mutedRef.current = muted }, [muted])
+  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('tetris-theme', theme) }, [theme])
 
   const syncBest = useCallback(value => { const top = Math.max(best, value); setBest(top); localStorage.setItem('tetris-best', String(top)) }, [best])
   const collides = useCallback((p, b = boardRef.current) => p.shape.some((row, y) => row.some((cell, x) => cell && (p.x + x < 0 || p.x + x >= W || p.y + y >= H || (p.y + y >= 0 && b[p.y + y][p.x + x])))), [])
@@ -71,20 +76,46 @@ function App() {
     window.addEventListener('keydown', handler); return () => window.removeEventListener('keydown', handler)
   }, [move, turn, drop, restart, syncBest])
   useEffect(() => { const timer = window.setInterval(() => { if (!pausedRef.current && !overRef.current) move(0, 1) }, Math.max(100, 850 - (level - 1) * 65)); return () => clearInterval(timer) }, [move, level])
-  useEffect(() => { fetch('http://localhost:8080/api/scores').then(r => r.ok ? r.json() : []).then(setScores).catch(() => {}) }, [])
-  const saveScore = async e => { e.preventDefault(); if (!player.trim() || saved) return; try { const res = await fetch('http://localhost:8080/api/scores', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: player.trim(), score }) }); if (res.ok) { setSaved(true); setScores(await (await fetch('http://localhost:8080/api/scores')).json()) } } catch {} }
+  const connectBackend = async (event) => {
+    event?.preventDefault()
+    const base = backendUrl.trim().replace(/\/+$/, '')
+    if (!base) { setConnection('error'); setApiMessage('Informe o endereço da API.'); return }
+    try {
+      new URL(base)
+      setConnection('connecting'); setApiMessage('Conectando…')
+      localStorage.setItem('tetris-backend-url', base)
+      const response = await fetch(`${base}/api/scores`)
+      if (!response.ok) throw new Error(`API respondeu com status ${response.status}`)
+      const data = await response.json()
+      if (!Array.isArray(data)) throw new Error('Resposta da API inválida')
+      setScores(data); setConnection('connected'); setApiMessage('Conectado. Placar online ativado.')
+    } catch (error) {
+      setConnection('error')
+      setApiMessage(error instanceof TypeError ? 'Não foi possível acessar a API. Confira o endereço e o CORS.' : error.message || 'Não foi possível conectar.')
+    }
+  }
+  const saveScore = async e => {
+    e.preventDefault()
+    if (!player.trim() || saved || connection !== 'connected') return
+    try {
+      const base = backendUrl.trim().replace(/\/+$/, '')
+      const res = await fetch(`${base}/api/scores`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: player.trim(), score }) })
+      if (!res.ok) throw new Error(`API respondeu com status ${res.status}`)
+      setSaved(true); await connectBackend()
+    } catch (error) { setConnection('error'); setApiMessage(error.message || 'Falha ao salvar pontuação.') }
+  }
 
   const display = useMemo(() => { const view = board.map(row => [...row]); const ghost = { ...piece }; while (!collides({ ...ghost, y: ghost.y + 1 }, view)) ghost.y++; ghost.shape.forEach((row, y) => row.forEach((v, x) => { if (v && ghost.y + y >= 0 && ghost.y + y < H && !view[ghost.y + y][ghost.x + x]) view[ghost.y + y][ghost.x + x] = 'ghost' })); piece.shape.forEach((row, y) => row.forEach((v, x) => { if (v && piece.y + y >= 0 && piece.y + y < H) view[piece.y + y][piece.x + x] = piece.color })); return view }, [board, piece, collides])
   const nextCells = useMemo(() => { const shape = next.shape, padX = Math.floor((4 - shape[0].length) / 2), padY = Math.floor((4 - shape.length) / 2); return Array.from({ length: 4 }, (_, y) => Array.from({ length: 4 }, (_, x) => shape[y - padY]?.[x - padX] ? next.color : null)) }, [next])
   const Key = ({ children }) => <kbd>{children}</kbd>
 
   return <main className="app-shell">
-    <header className="topbar"><a className="brand" href="#top" aria-label="Tetris início"><span className="brand-mark"><i/><i/><i/><i/></span><span>tetris<span className="brand-dot">.</span></span></a><div className="top-note"><span className="live-dot"/> jogo clássico, momento presente</div><button className="icon-button sound-button" onClick={() => setMuted(m => !m)} aria-label={muted ? 'Ativar som' : 'Desativar som'}>{muted ? <VolumeX size={17}/> : <Volume2 size={17}/>}</button></header>
+    <header className="topbar"><a className="brand" href="#top" aria-label="Tetris início"><span className="brand-mark"><i/><i/><i/><i/></span><span>tetris<span className="brand-dot">.</span></span></a><div className="top-note"><span className="live-dot"/> jogo clássico, momento presente</div><div className="top-actions"><button className="icon-button" onClick={() => setMuted(m => !m)} aria-label={muted ? 'Ativar som' : 'Desativar som'}>{muted ? <VolumeX size={17}/> : <Volume2 size={17}/>}</button><button className="icon-button" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'} title={theme === 'dark' ? 'Tema claro' : 'Tema escuro'}>{theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}</button></div></header>
     <section className="hero" id="top"><div className="eyebrow"><span>01</span><span className="eyebrow-line"/> seu momento de pausa</div><h1>Um bloco<br/>de cada <span>vez.</span></h1><p className="hero-copy">Respire fundo. Encontre seu espaço.<br/>O resto se encaixa.</p></section>
     <section className="game-layout" aria-label="Jogo Tetris">
       <div className="board-wrap"><div className="board-frame"><div className="board-topline"><span>ÁREA DE JOGO</span><span className="board-level">LVL <b>{String(level).padStart(2, '0')}</b></span></div><div className="board" role="grid" aria-label={`Tabuleiro, pontuação ${score}`}>
         {display.flatMap((row, y) => row.map((color, x) => <div className={`cell ${color ? color === 'ghost' ? 'ghost' : 'filled' : ''}`} style={color && color !== 'ghost' ? { '--cell-color': color } : {}} key={`${y}-${x}`} role="gridcell"/>))}
-        {(paused || over) && <div className="board-overlay"><div className="overlay-card"><span className="overlay-icon">{over ? '✦' : 'Ⅱ'}</span><h2>{over ? 'Fim de jogo' : 'Respire.'}</h2><p>{over ? `Você fez ${score.toLocaleString('pt-BR')} pontos.` : 'Seu jogo está pausado.'}</p>{over && !saved ? <form className="score-form" onSubmit={saveScore}><input aria-label="Seu nome" maxLength="16" placeholder="Seu nome" value={player} onChange={e => setPlayer(e.target.value)} required/><button type="submit">Salvar pontuação</button></form> : null}<button className="overlay-action" onClick={over ? restart : () => setPaused(false)}>{over ? <><RotateCcw size={15}/> jogar de novo</> : <><Play size={15}/> continuar</>}</button></div></div>}
+        {(paused || over) && <div className="board-overlay"><div className="overlay-card"><span className="overlay-icon">{over ? '✦' : 'Ⅱ'}</span><h2>{over ? 'Fim de jogo' : 'Respire.'}</h2><p>{over ? `Você fez ${score.toLocaleString('pt-BR')} pontos.` : 'Seu jogo está pausado.'}</p>{over && !saved && connection === 'connected' ? <form className="score-form" onSubmit={saveScore}><input aria-label="Seu nome" maxLength="16" placeholder="Seu nome" value={player} onChange={e => setPlayer(e.target.value)} required/><button type="submit">Salvar pontuação</button></form> : null}{over && !saved && connection !== 'connected' ? <p className="offline-note">Conecte a API abaixo para enviar seu placar.</p> : null}<button className="overlay-action" onClick={over ? restart : () => setPaused(false)}>{over ? <><RotateCcw size={15}/> jogar de novo</> : <><Play size={15}/> continuar</>}</button></div></div>}
       </div><div className="board-caption"><span><i className="caption-dot"/> em jogo</span><span>{lines} LINHAS</span></div></div><div className="board-bottom-note">CADA PEÇA ENCONTRA SEU LUGAR <span>✳</span></div></div>
       <aside className="sidebar"><div className="stats-grid"><div className="stat-card score-card"><span className="stat-label">PONTUAÇÃO</span><strong>{score.toLocaleString('pt-BR')}</strong><span className="stat-foot">seu ritmo, seu jogo</span></div><div className="stat-card best-card"><span className="stat-label">RECORDE</span><strong>{best.toLocaleString('pt-BR')}</strong><span className="stat-foot">melhor de todos</span></div></div>
         <div className="side-card next-card"><div className="card-heading"><span>PRÓXIMA PEÇA</span><span className="tiny-spark">✳</span></div><div className="next-preview">{nextCells.flatMap((row, y) => row.map((color, x) => <div key={`${y}-${x}`} className={`mini-cell ${color ? 'filled' : ''}`} style={color ? { '--cell-color': color } : {}}/>))}</div><div className="next-hint">tudo começa com um encaixe</div></div>
@@ -92,7 +123,7 @@ function App() {
         <div className="actions"><button className="action-primary" onClick={() => { setPaused(p => { pausedRef.current = !p; return !p }) }} disabled={over}><span>{paused ? <Play size={15}/> : <Pause size={15}/>}</span>{paused ? 'Continuar' : 'Pausar'}<Key>P</Key></button><button className="action-secondary" onClick={restart}><RotateCcw size={15}/><span>Novo jogo</span><Key>R</Key></button></div>
       </aside>
     </section>
-    <section className="leaderboard"><div className="leaderboard-head"><div><div className="eyebrow"><span>02</span><span className="eyebrow-line"/> pequenos grandes feitos</div><h2>Placar da <span>pausa.</span></h2></div><span className="leaderboard-note">TOP JOGADORES</span></div><div className="leader-table"><div className="leader-row leader-header"><span>#</span><span>JOGADOR</span><span>PONTOS</span></div>{scores.length ? scores.slice(0, 5).map((s, i) => <div className="leader-row" key={s.id}><span className={`rank rank-${i + 1}`}>{String(i + 1).padStart(2, '0')}</span><span>{s.name}</span><strong>{s.score.toLocaleString('pt-BR')}</strong></div>) : <div className="leader-empty"><span>✳</span><p>O primeiro lugar está esperando por você.</p></div>}</div></section>
+    <section className="leaderboard"><div className="leaderboard-head"><div><div className="eyebrow"><span>02</span><span className="eyebrow-line"/> pequenos grandes feitos</div><h2>Placar da <span>pausa.</span></h2></div><span className="leaderboard-note">TOP JOGADORES</span></div><form className="backend-connect" onSubmit={connectBackend}><label htmlFor="backend-url">ENDEREÇO DO BACKEND</label><div className="backend-connect-row"><input id="backend-url" type="url" placeholder="http://localhost:8080" value={backendUrl} onChange={e => setBackendUrl(e.target.value)} /><button type="submit" disabled={connection === 'connecting'}>{connection === 'connecting' ? 'Conectando…' : connection === 'connected' ? 'Atualizar placar' : 'Conectar'}</button></div><div className={`connection-status ${connection}`}><span className="status-dot"/>{apiMessage || 'Offline: o jogo funciona sem backend. Conecte para usar o placar online.'}</div></form><div className="leader-table"><div className="leader-row leader-header"><span>#</span><span>JOGADOR</span><span>PONTOS</span></div>{scores.length ? scores.slice(0, 5).map((s, i) => <div className="leader-row" key={s.id}><span className={`rank rank-${i + 1}`}>{String(i + 1).padStart(2, '0')}</span><span>{s.name}</span><strong>{s.score.toLocaleString('pt-BR')}</strong></div>) : <div className="leader-empty"><span>✳</span><p>{connection === 'connected' ? 'O primeiro lugar está esperando por você.' : 'Sem conexão, sem problema. O jogo continua.'}</p></div>}</div></section>
     <footer className="footer"><a className="brand footer-brand" href="#top"><span className="brand-mark"><i/><i/><i/><i/></span><span>tetris<span className="brand-dot">.</span></span></a><span>feito para desacelerar <span>✳</span> um bloco de cada vez</span><button className="footer-restart" onClick={restart}><RotateCcw size={13}/> novo jogo</button></footer>
   </main>
 }
